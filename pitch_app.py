@@ -20,6 +20,8 @@ from datetime import datetime
 
 import pitch_engine as pe
 import pitch_extractor as px
+import pitch_live_data as pld
+import pitch_exports as pex
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _secret(key, default=""):
@@ -315,10 +317,24 @@ if analyse_btn and pitch_text.strip():
         st.session_state["params"]       = params
         st.session_state["meta"]         = meta
         st.session_state["valuation"]    = pe.compute_valuation(params)
-        # Clear PESTEL/Porter caches so they regenerate for new pitch
+        # Clear caches so they regenerate for new pitch
         for k in list(st.session_state.keys()):
-            if k.startswith("pestel_") or k.startswith("porter_"):
+            if k.startswith("pestel_") or k.startswith("porter_") or k.startswith("enrich_"):
                 del st.session_state[k]
+
+if analyse_btn and pitch_text.strip():
+    with st.spinner("Pulling live market data (Eurostat + OECD)..."):
+        _params     = st.session_state.get("params")
+        if _params:
+            _ekey = f"enrich_{_params.business_model}_{_params.geography}"
+            if _ekey not in st.session_state:
+                _enr = pld.enrich_with_live_data(
+                    _params.business_model, _params.geography)
+                st.session_state[_ekey] = _enr
+                if _enr.get("live_tam_eur"):
+                    _params.tam_eur = _enr["live_tam_eur"]
+                    st.session_state["params"]    = _params
+                    st.session_state["valuation"] = pe.compute_valuation(_params)
 
 # ── Show results if we have them ───────────────────────────────────────────────
 if "valuation" in st.session_state:
@@ -544,6 +560,67 @@ if "valuation" in st.session_state:
       </div>
       <div class="prov" style="margin-top:10px;">{result.comparable_notes}</div>
     </div>""", unsafe_allow_html=True)
+
+    # ── Live data enrichment display ─────────────────────────────────────────
+    enrich_key  = f"enrich_{params.business_model}_{params.geography}"
+    enrichment  = st.session_state.get(enrich_key, {})
+    if enrichment and enrichment.get("data_sources"):
+        st.markdown('<div class="sec">Live Market Data &mdash; Eurostat + OECD</div>',
+                    unsafe_allow_html=True)
+        note       = pld.format_enrichment_note(enrichment)
+        macro_adj  = enrichment.get("macro_adjustment", 1.0)
+        adj_color  = "#2E7D32" if macro_adj >= 1.0 else "#C62828"
+        adj_label  = (f"+{int((macro_adj-1)*100)}% growth uplift"
+                      if macro_adj > 1.0
+                      else f"{int((macro_adj-1)*100)}% growth headwind")
+        st.markdown(
+            '<div style="background:#FFFFFF;border:1px solid #CDD2DB;'
+            'border-radius:8px;padding:16px 20px;margin-bottom:8px;">'
+            '<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;'
+            f'text-transform:uppercase;color:{CLR};margin-bottom:8px;">'
+            'Live data enrichment active</div>'
+            + note +
+            f'<div style="margin-top:8px;font-size:0.78rem;font-weight:600;'
+            f'color:{adj_color};">Macro adjustment: {adj_label} '
+            f'(OECD CLI {enrichment.get("cli",100.0)}, '
+            f'{enrichment.get("cli_trend","neutral")})</div>'
+            '<div class="prov">Sources: '
+            + ' / '.join(enrichment.get("data_sources", ["sector benchmarks"]))
+            + '</div></div>',
+            unsafe_allow_html=True)
+
+    # ── Download exports ───────────────────────────────────────────────────────
+    st.markdown('<div class="sec">Download Financial Models</div>',
+                unsafe_allow_html=True)
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        enrich_key2 = f"enrich_{params.business_model}_{params.geography}"
+        enrichment2 = st.session_state.get(enrich_key2, {})
+        dcf_bytes   = pex.build_dcf_model(params, enrichment2)
+        st.download_button(
+            label="Download DCF Model (.xlsx)",
+            data=dcf_bytes,
+            file_name=f"ValuePitch_DCF_{params.company_name.replace(' ','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="10-year DCF with three scenarios, sensitivity table. Yellow cells are editable.",
+        )
+    with dl2:
+        mc_bytes = pex.build_monte_carlo(params, n_simulations=1000)
+        st.download_button(
+            label="Download Monte Carlo (.xlsx)",
+            data=mc_bytes,
+            file_name=f"ValuePitch_MonteCarlo_{params.company_name.replace(' ','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="1,000 simulations varying growth, margin, exit multiple + survival probability.",
+        )
+    with dl3:
+        st.markdown(
+            '<div style="background:#F8F9FA;border:1px dashed #CDD2DB;'
+            'border-radius:8px;padding:14px 16px;text-align:center;'
+            'font-size:0.8rem;color:#7A8499;">'
+            'Executive Summary PDF<br>'
+            '<span style="font-size:0.7rem;">Coming soon</span></div>',
+            unsafe_allow_html=True)
 
     # ── PESTEL ─────────────────────────────────────────────────────────────────
     st.markdown(
