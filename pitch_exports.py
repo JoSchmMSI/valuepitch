@@ -25,6 +25,9 @@ Both follow the xlsx skill conventions:
 import io
 import math
 import random
+import subprocess
+import tempfile
+import os
 import openpyxl
 from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side, numbers
@@ -61,6 +64,35 @@ def _set(ws, row, col, value, bold=False, color="000000", size=10,
     if num_fmt:
         cell.number_format = num_fmt
     return cell
+
+
+def _recalc_bytes(buf: io.BytesIO) -> io.BytesIO:
+    """
+    Write workbook to temp file, recalculate via LibreOffice,
+    read back as BytesIO. This populates all formula cached values
+    so Excel shows numbers immediately on open.
+    """
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+        tmp.write(buf.getvalue())
+        tmp_path = tmp.name
+    try:
+        subprocess.run(
+            ['python3', '/mnt/skills/public/xlsx/scripts/recalc.py',
+             tmp_path, '60'],
+            capture_output=True, text=True, timeout=90
+        )
+        with open(tmp_path, 'rb') as f:
+            result = io.BytesIO(f.read())
+        result.seek(0)
+        return result
+    except Exception:
+        buf.seek(0)
+        return buf
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 # ── DCF MODEL ─────────────────────────────────────────────────────────────────
@@ -373,7 +405,7 @@ def build_dcf_model(params: PitchParameters,
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-    return output
+    return _recalc_bytes(output)
 
 
 # ── MONTE CARLO MODEL ──────────────────────────────────────────────────────────
@@ -550,4 +582,4 @@ def build_monte_carlo(params: PitchParameters,
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-    return output
+    return _recalc_bytes(output)
