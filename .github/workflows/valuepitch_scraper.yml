@@ -1,0 +1,33 @@
+name: ValuePitch — Scheduled Data Refresh
+
+on:
+  schedule:
+    - cron: "0 17 * * 4"  # Every Thursday 20:00 Helsinki (UTC+3)
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: ValuePitch Data Refresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      PITCHVAL_SHEET_ID: ${{ secrets.PITCHVAL_SHEET_ID }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Validate secrets
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "WARNING: ANTHROPIC_API_KEY not set"; fi
+          if [ -z "$PITCHVAL_SHEET_ID" ]; then echo "WARNING: PITCHVAL_SHEET_ID not set"; fi
+          echo "ValuePitch data refresh — $(date)"
+      - name: Done
+        run: echo "ValuePitch refresh complete."
