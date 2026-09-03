@@ -459,6 +459,9 @@ def build_monte_carlo(params: PitchParameters,
         valuation   = max(0.0, fcf_sum + pv_terminal)
         results.append(valuation)
 
+    # Keep unsorted copy for raw sample sheet BEFORE sorting
+    # (sort puts zeros first; sample[:500] would be all "Failed")
+    results_unsorted = results[:]
     results.sort()
     n = len(results)
     non_zero = [r for r in results if r > 0]
@@ -570,7 +573,7 @@ def build_monte_carlo(params: PitchParameters,
     _set(ws_raw, 1, 1, "Run #", bold=True)
     _set(ws_raw, 1, 2, "Simulated Valuation (EUR)", bold=True)
     _set(ws_raw, 1, 3, "Outcome", bold=True)
-    sample = results[:500]
+    sample = results_unsorted[:500]
     for i, val in enumerate(sample):
         row = i + 2
         _set(ws_raw, row, 1, i + 1, align="right")
