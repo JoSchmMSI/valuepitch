@@ -150,17 +150,29 @@ def ai_call(system: str, user: str, max_tokens: int = 600) -> str:
 
 
 def _extract_json(text: str) -> dict:
-    """Extract JSON from AI response regardless of surrounding text or fences."""
+    """Extract JSON from AI response — handles fences, truncation, partial output."""
     if not text:
         return {}
     text = text.strip()
-    # Find outermost { ... }
+    # Find opening brace
     try:
         start = text.index("{")
-        end   = text.rindex("}") + 1
+    except ValueError:
+        return {}
+    # Try full parse first
+    try:
+        end = text.rindex("}") + 1
         return json.loads(text[start:end])
     except Exception:
-        return {}
+        pass
+    # JSON truncated — try to repair by appending closing braces
+    partial = text[start:]
+    for suffix in ['"}', '"}}', '"}}}']:
+        try:
+            return json.loads(partial + suffix)
+        except Exception:
+            pass
+    return {}
 
 
 def _flatten_values(data: dict) -> dict:
@@ -259,7 +271,7 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
         + '{"political":"...","economic":"...","social":"...","technological":"...","environmental":"...","legal":"..."}'
     )
 
-    result = _call_claude_only(system, prompt, max_tokens=800)
+    result = _call_claude_only(system, prompt, max_tokens=1500)
     data   = _flatten_values(_extract_json(result))
 
     if data and REQUIRED.issubset(data.keys()):
@@ -301,7 +313,7 @@ def generate_porter(sector: str, business_model: str) -> dict:
         + '"substitutes":{"level":"High/Medium/Low","note":"2-3 specific sentences"}}'
     )
 
-    result = _call_claude_only(system, prompt, max_tokens=600)
+    result = _call_claude_only(system, prompt, max_tokens=1200)
     data   = _extract_json(result)
 
     # Validate structure — each value needs level + note
@@ -352,7 +364,7 @@ st.markdown(f"""
     Live analysis &nbsp;&middot;&nbsp;
     <strong style="color:#0D1117;">{datetime.now().strftime('%d %b %Y, %H:%M')}</strong>
     <br><span style="font-size:0.64rem;color:#9BAEC8;">
-    Claude Sonnet AI &nbsp;&middot;&nbsp; Financial model engine &nbsp;&middot;&nbsp;
+    AI analysis engine &nbsp;&middot;&nbsp; Financial model engine &nbsp;&middot;&nbsp;
     Live market benchmarks</span>
   </div>
 </div>
@@ -401,7 +413,7 @@ analyse_btn = st.button(
 
 # ── Run extraction + valuation ─────────────────────────────────────────────────
 if analyse_btn and pitch_text.strip():
-    with st.spinner("Claude is reading the pitch and extracting parameters..."):
+    with st.spinner("Extracting parameters and analyzing the pitch..."):
         extracted = px.extract_from_pitch(pitch_text, user_type_code)
         params    = px.dict_to_params(extracted, user_type_code)
         meta      = px.get_pitch_meta(extracted)
@@ -530,33 +542,44 @@ if "valuation" in st.session_state:
                             f'<div class="risk">&#9651; {r}</div>',
                             unsafe_allow_html=True)
 
-    # ── Scorecard ──────────────────────────────────────────────────────────────
-    sc = result.scorecard_score
+    # ── Scorecard with confidence range ───────────────────────────────────────
+    sc     = result.scorecard_score
+    sc_lo  = max(0,   round(sc - 7))
+    sc_hi  = min(100, round(sc + 7))
     sc_color = score_color(sc)
-    st.markdown(f"""
-    <div style="background:#FFFFFF;border:1px solid #CDD2DB;border-radius:8px;
-      padding:16px 20px;margin:16px 0;">
-      <div style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;
-        text-transform:uppercase;color:{CLR};margin-bottom:8px;">
-        Scorecard Rating (Bill Payne Method)</div>
-      <div style="display:flex;align-items:center;gap:16px;">
-        <div style="font-size:2.4rem;font-weight:800;color:{sc_color};">{sc}/100</div>
-        <div>
-          <div style="font-size:0.95rem;font-weight:600;color:#0D1117;">
-            {result.scorecard_label}</div>
-          <div class="score-bar-bg">
-            <div style="background:{sc_color};height:8px;border-radius:4px;
-              width:{sc}%;"></div></div>
-          <div style="font-size:0.72rem;color:#7A8499;">
-            Team {params.team_score:.0f}/10 &nbsp;&middot;&nbsp;
-            Market {params.market_score:.0f}/10 &nbsp;&middot;&nbsp;
-            Product {params.product_score:.0f}/10 &nbsp;&middot;&nbsp;
-            Traction {params.traction_score:.0f}/10 &nbsp;&middot;&nbsp;
-            Competition {params.competition_score:.0f}/10
-          </div>
-        </div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<div style="background:#FFFFFF;border:1px solid #CDD2DB;border-radius:8px;'
+        'padding:16px 20px;margin:16px 0;">'
+        '<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;'
+        f'text-transform:uppercase;color:{CLR};margin-bottom:8px;">'
+        'Scorecard Rating (Bill Payne Method)</div>'
+        '<div style="display:flex;align-items:center;gap:20px;">'
+        '<div style="text-align:center;min-width:120px;">'
+        f'<div style="font-size:2.2rem;font-weight:800;color:{sc_color};line-height:1;">'
+        f'{sc_lo}&ndash;{sc_hi}</div>'
+        '<div style="font-size:0.65rem;color:#7A8499;margin-top:2px;">/ 100</div>'
+        '</div>'
+        '<div style="flex:1;">'
+        f'<div style="font-size:0.95rem;font-weight:600;color:#0D1117;margin-bottom:6px;">'
+        f'{result.scorecard_label}</div>'
+        '<div style="position:relative;height:12px;background:#E5E7EB;border-radius:6px;margin-bottom:6px;">'
+        f'<div style="position:absolute;left:{sc_lo}%;width:{sc_hi - sc_lo}%;height:100%;'
+        f'background:{sc_color};opacity:0.35;border-radius:6px;"></div>'
+        f'<div style="position:absolute;left:{sc}%;transform:translateX(-50%);'
+        f'width:4px;height:100%;background:{sc_color};border-radius:2px;"></div>'
+        '</div>'
+        f'<div style="font-size:0.7rem;color:#7A8499;">'
+        f'Estimate: <strong style="color:{sc_color};">{sc}/100</strong>'
+        f'&nbsp;&nbsp;Range: {sc_lo}&ndash;{sc_hi}'
+        f'&nbsp;&nbsp;<em>Reflects AI assessment variance</em></div>'
+        f'<div style="font-size:0.68rem;color:#9CA3AF;margin-top:4px;">'
+        f'Team {params.team_score:.0f}/10 &nbsp;&middot;&nbsp;'
+        f'Market {params.market_score:.0f}/10 &nbsp;&middot;&nbsp;'
+        f'Product {params.product_score:.0f}/10 &nbsp;&middot;&nbsp;'
+        f'Traction {params.traction_score:.0f}/10 &nbsp;&middot;&nbsp;'
+        f'Competition {params.competition_score:.0f}/10</div>'
+        '</div></div></div>',
+        unsafe_allow_html=True)
 
     # ── Three-scenario valuation cards ─────────────────────────────────────────
     st.markdown(
@@ -817,7 +840,7 @@ else:
         Porter's Five Forces. No forms to fill. Just paste and analyse.
       </div>
       <div style="margin-top:24px;font-size:0.72rem;color:#9CA3AF;">
-        AI layer: Claude Sonnet &nbsp;&middot;&nbsp;
+        AI analysis engine &nbsp;&middot;&nbsp;
         Financial engine: DCF + VC Method + Revenue Multiple &nbsp;&middot;&nbsp;
         Benchmarks: Equidam H1 2026 + sector data
       </div>
