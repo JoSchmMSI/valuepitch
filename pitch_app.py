@@ -432,7 +432,7 @@ if analyse_btn and pitch_text.strip():
         st.session_state["valuation"]    = pe.compute_valuation(params)
         # Clear ALL analysis caches on every new pitch submission
         for k in list(st.session_state.keys()):
-            if any(k.startswith(p) for p in ["pestel_","porter_","enrich_"]):
+            if any(k.startswith(p) for p in ["pestel_","porter_","enrich_","dcf_","mc_"]):
                 del st.session_state[k]
 
 if analyse_btn and pitch_text.strip():
@@ -703,23 +703,28 @@ if "valuation" in st.session_state:
     # ── Download exports ───────────────────────────────────────────────────────
     st.markdown('<div class="sec">Download Financial Models</div>',
                 unsafe_allow_html=True)
+    # Build Excel files once and cache — avoids rebuilding on every render
+    _dcf_key = f"dcf_{params.company_name}_{params.stage}_{params.projected_revenue_yr5}"
+    _mc_key  = f"mc_{params.company_name}_{params.stage}_{params.projected_revenue_yr5}"
+    if _dcf_key not in st.session_state:
+        _enr2 = st.session_state.get(f"enrich_{params.business_model}_{params.geography}", {})
+        st.session_state[_dcf_key] = pex.build_dcf_model(params, _enr2).getvalue()
+    if _mc_key not in st.session_state:
+        st.session_state[_mc_key] = pex.build_monte_carlo(params, n_simulations=1000).getvalue()
+
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
-        enrich_key2 = f"enrich_{params.business_model}_{params.geography}"
-        enrichment2 = st.session_state.get(enrich_key2, {})
-        dcf_bytes   = pex.build_dcf_model(params, enrichment2)
         st.download_button(
             label="Download DCF Model (.xlsx)",
-            data=dcf_bytes,
+            data=st.session_state[_dcf_key],
             file_name=f"ValuePitch_DCF_{params.company_name.replace(' ','_')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="10-year DCF with three scenarios, sensitivity table. Yellow cells are editable.",
         )
     with dl2:
-        mc_bytes = pex.build_monte_carlo(params, n_simulations=1000)
         st.download_button(
             label="Download Monte Carlo (.xlsx)",
-            data=mc_bytes,
+            data=st.session_state[_mc_key],
             file_name=f"ValuePitch_MonteCarlo_{params.company_name.replace(' ','_')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="1,000 simulations varying growth, margin, exit multiple + survival probability.",
