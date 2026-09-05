@@ -231,7 +231,7 @@ def _call_claude_only(system: str, prompt: str, max_tokens: int = 700) -> str:
                 "system": system,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=20,
+            timeout=45,
         )
         if r.status_code == 200:
             blocks = r.json().get("content", [])
@@ -264,8 +264,8 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
 
     system = (
         "You are a strategy analyst. Respond ONLY with a flat JSON object "
-        "where each value is a plain string of 2-3 sentences. "
-        "No nested objects. No arrays. No markdown. No explanation."
+        "where each value is a plain string of exactly 2 sentences maximum. "
+        "Be concise. No nested objects. No arrays. No markdown. No explanation."
     )
     prompt = (
         f"Write a PESTEL analysis for: Sector={sector}, Geography={geography}, "
@@ -276,7 +276,7 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
         + '{"political":"...","economic":"...","social":"...","technological":"...","environmental":"...","legal":"..."}'
     )
 
-    result = _call_claude_only(system, prompt, max_tokens=1500)
+    result = _call_claude_only(system, prompt, max_tokens=900)
     data   = _flatten_values(_extract_json(result))
 
     if data and REQUIRED.issubset(data.keys()):
