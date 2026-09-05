@@ -149,80 +149,156 @@ def ai_call(system: str, user: str, max_tokens: int = 600) -> str:
     return ""
 
 
-def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
-    """Generate PESTEL analysis for the extracted sector/geography."""
-    cache_key = f"pestel_{sector}_{geography}"
-    if cache_key in st.session_state:
-        return st.session_state[cache_key]
-
-    system = """You are a strategic analyst. Generate a concise PESTEL analysis.
-Return ONLY a JSON object with exactly these keys:
-{
-  "political": "2-3 sentences on political factors",
-  "economic": "2-3 sentences on economic factors",
-  "social": "2-3 sentences on social/demographic factors",
-  "technological": "2-3 sentences on technology factors",
-  "environmental": "2-3 sentences on environmental/sustainability factors",
-  "legal": "2-3 sentences on legal/regulatory factors"
-}
-No markdown, no explanation. Only the JSON."""
-
-    prompt = f"Sector: {sector}\nGeography: {geography}\nBusiness model: {business_model}\nGenerate PESTEL."
-    result = ai_call(system, prompt, max_tokens=500)
+def _parse_ai_json(result: str) -> dict:
+    """Robustly parse JSON from AI response — handles fences, trailing text, partial output."""
+    if not result:
+        return {}
+    text = result.strip()
+    # Strip markdown fences
+    if "```" in text:
+        for part in text.split("```"):
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            try:
+                return json.loads(part)
+            except Exception:
+                continue
+    # Try direct parse
     try:
-        text = result.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        data = json.loads(text.strip())
+        return json.loads(text)
     except Exception:
-        data = {
-            "political":     "Political stability in target markets supports business activity.",
-            "economic":      "Sector growth aligned with regional GDP trends.",
-            "social":        "Shifting consumer preferences and digital adoption driving demand.",
-            "technological": "Rapid technological change creates both opportunities and disruption risk.",
-            "environmental": "Increasing regulatory pressure on environmental sustainability.",
-            "legal":         "Data protection, intellectual property, and sector-specific regulation apply.",
-        }
+        pass
+    # Extract JSON object between first { and last }
+    try:
+        start = text.index("{")
+        end   = text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except Exception:
+        return {}
+
+
+def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
+    """
+    Generate PESTEL analysis specific to sector + geography.
+    Never caches fallback values — only caches real AI output.
+    Retries once if first attempt returns generic/empty output.
+    """
+    cache_key = f"pestel_{sector}_{geography}_{business_model}"
+    if cache_key in st.session_state:
+        cached = st.session_state[cache_key]
+        # Only return cache if it contains real content (not generic fallback)
+        if cached.get("_is_fallback"):
+            del st.session_state[cache_key]
+        else:
+            return cached
+
+    system = (
+        "You are a senior strategy analyst. Your task is to write a PESTEL analysis "
+        "that is SPECIFIC to the exact sector and geography provided. "
+        "Every sentence must reference the actual industry, country/region, "
+        "and relevant real-world dynamics — regulations, market trends, technology shifts. "
+        "Generic statements are NOT acceptable. "
+        "Respond with ONLY a JSON object. Start with { end with }. No other text."
+    )
+
+    prompt = (
+        f"Write a PESTEL analysis for this specific business:\n"
+        f"Sector: {sector}\n"
+        f"Geography: {geography}\n"
+        f"Business model: {business_model}\n\n"
+        f"Each factor must be 2-4 sentences, highly specific to {geography} and {sector}.\n"
+        f"Return JSON with keys: political, economic, social, technological, environmental, legal"
+    )
+
+    REQUIRED_KEYS = {"political", "economic", "social", "technological", "environmental", "legal"}
+    GENERIC_PHRASES = [
+        "political stability in target markets",
+        "sector growth aligned with regional gdp",
+        "shifting consumer preferences",
+        "rapid technological change creates",
+        "increasing regulatory pressure on environmental",
+        "data protection, intellectual property",
+    ]
+
+    def _is_generic(data: dict) -> bool:
+        """Return True if the response looks like the hardcoded fallback."""
+        if not data:
+            return True
+        for v in data.values():
+            for phrase in GENERIC_PHRASES:
+                if phrase.lower() in str(v).lower():
+                    return True
+        return False
+
+    # Try up to 2 times
+    data = {}
+    for attempt in range(2):
+        result = ai_call(system, prompt, max_tokens=700)
+        data   = _parse_ai_json(result)
+        if data and REQUIRED_KEYS.issubset(data.keys()) and not _is_generic(data):
+            st.session_state[cache_key] = data
+            return data
+
+    # If both attempts fail or return generic, show clear failure — do NOT show generic
+    if not data or not REQUIRED_KEYS.issubset(data.keys()):
+        failure = {k: f"Analysis unavailable for {sector} / {geography} — check API key." 
+                   for k in REQUIRED_KEYS}
+        failure["_is_fallback"] = True
+        return failure
+
+    # Has keys but might be generic — still cache and return (better than failure message)
     st.session_state[cache_key] = data
     return data
 
 
 def generate_porter(sector: str, business_model: str) -> dict:
-    """Generate Porter's Five Forces summary."""
+    """
+    Generate Porter's Five Forces specific to sector and business model.
+    Never caches fallback. Uses same robust JSON parser as PESTEL.
+    """
     cache_key = f"porter_{sector}_{business_model}"
     if cache_key in st.session_state:
-        return st.session_state[cache_key]
+        cached = st.session_state[cache_key]
+        if cached.get("_is_fallback"):
+            del st.session_state[cache_key]
+        else:
+            return cached
 
-    system = """You are a strategic analyst. Generate a Porter's Five Forces analysis.
-Return ONLY a JSON object:
-{
-  "rivalry": {"level": "High/Medium/Low", "note": "1-2 sentences"},
-  "new_entrants": {"level": "High/Medium/Low", "note": "1-2 sentences"},
-  "suppliers": {"level": "High/Medium/Low", "note": "1-2 sentences"},
-  "buyers": {"level": "High/Medium/Low", "note": "1-2 sentences"},
-  "substitutes": {"level": "High/Medium/Low", "note": "1-2 sentences"}
-}
-No markdown, no explanation. Only the JSON."""
+    system = (
+        "You are a senior strategy analyst. Write a Porter's Five Forces analysis "
+        "that is SPECIFIC to the exact sector and business model provided. "
+        "Each force must reference real competitive dynamics, named competitors, "
+        "or specific market conditions — not generic statements. "
+        "Respond with ONLY a JSON object. Start with { end with }. No other text."
+    )
 
-    prompt = f"Sector: {sector}\nBusiness model: {business_model}\nGenerate Porter's Five Forces."
-    result = ai_call(system, prompt, max_tokens=400)
-    try:
-        text = result.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        data = json.loads(text.strip())
-    except Exception:
-        data = {
-            "rivalry":      {"level": "Medium", "note": "Moderate competitive intensity in sector."},
-            "new_entrants": {"level": "Medium", "note": "Moderate barriers to entry."},
-            "suppliers":    {"level": "Low",    "note": "Limited supplier power in this model."},
-            "buyers":       {"level": "Medium", "note": "Buyers have moderate switching ability."},
-            "substitutes":  {"level": "Medium", "note": "Some substitute solutions exist."},
-        }
+    prompt = (
+        f"Write Porter's Five Forces for this business:\n"
+        f"Sector: {sector}\n"
+        f"Business model: {business_model}\n\n"
+        f"Be specific — name actual competitors, real regulations, real dynamics.\n"
+        f"Return JSON with keys: rivalry, new_entrants, suppliers, buyers, substitutes\n"
+        f"Each value: {{\"level\": \"High/Medium/Low\", \"note\": \"2-3 specific sentences\"}}"
+    )
+
+    REQUIRED_KEYS = {"rivalry", "new_entrants", "suppliers", "buyers", "substitutes"}
+
+    data = {}
+    for attempt in range(2):
+        result = ai_call(system, prompt, max_tokens=500)
+        data   = _parse_ai_json(result)
+        if data and REQUIRED_KEYS.issubset(data.keys()):
+            st.session_state[cache_key] = data
+            return data
+
+    if not data or not REQUIRED_KEYS.issubset(data.keys()):
+        failure = {k: {"level": "Medium",
+                       "note": f"Analysis unavailable for {sector} — check API key."}
+                   for k in REQUIRED_KEYS}
+        failure["_is_fallback"] = True
+        return failure
+
     st.session_state[cache_key] = data
     return data
 
