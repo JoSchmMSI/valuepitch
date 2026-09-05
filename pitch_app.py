@@ -149,27 +149,12 @@ def ai_call(system: str, user: str, max_tokens: int = 600) -> str:
     return ""
 
 
-def _parse_ai_json(result: str) -> dict:
-    """Robustly parse JSON from AI response — handles fences, trailing text, partial output."""
-    if not result:
+def _extract_json(text: str) -> dict:
+    """Extract JSON from AI response regardless of surrounding text or fences."""
+    if not text:
         return {}
-    text = result.strip()
-    # Strip markdown fences
-    if "```" in text:
-        for part in text.split("```"):
-            part = part.strip()
-            if part.startswith("json"):
-                part = part[4:].strip()
-            try:
-                return json.loads(part)
-            except Exception:
-                continue
-    # Try direct parse
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    # Extract JSON object between first { and last }
+    text = text.strip()
+    # Find outermost { ... }
     try:
         start = text.index("{")
         end   = text.rindex("}") + 1
@@ -178,129 +163,160 @@ def _parse_ai_json(result: str) -> dict:
         return {}
 
 
+def _flatten_values(data: dict) -> dict:
+    """
+    Convert any nested dict/list values to plain strings.
+    Claude sometimes returns {"political": {"summary": "...", "factors": [...]}}
+    This flattens those into {"political": "summary. factor1. factor2."}
+    """
+    result = {}
+    for k, v in data.items():
+        if k.startswith("_"):
+            result[k] = v
+            continue
+        if isinstance(v, str):
+            result[k] = v
+        elif isinstance(v, dict):
+            # Extract summary or first string value, then append factors if any
+            parts = []
+            if "summary" in v:
+                parts.append(str(v["summary"]))
+            if "factors" in v and isinstance(v["factors"], list):
+                for f in v["factors"][:3]:
+                    if isinstance(f, dict):
+                        parts.append(str(f.get("factor", f.get("description", ""))))
+                    elif isinstance(f, str):
+                        parts.append(f)
+            if not parts:
+                parts = [str(vv) for vv in v.values() if isinstance(vv, str)][:2]
+            result[k] = " ".join(parts) if parts else str(v)
+        elif isinstance(v, list):
+            result[k] = " ".join(str(i) for i in v[:3])
+        else:
+            result[k] = str(v)
+    return result
+
+
+def _call_claude_only(system: str, prompt: str, max_tokens: int = 700) -> str:
+    """
+    Call Claude API directly — no Groq fallback for PESTEL/Porter.
+    Groq's api.groq.com is blocked by Streamlit Cloud's egress policy.
+    Claude-only with 20-second timeout to avoid long waits on failure.
+    """
+    if not ANTHROPIC_KEY:
+        return ""
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=20,
+        )
+        if r.status_code == 200:
+            blocks = r.json().get("content", [])
+            return "".join(b.get("text", "") for b in blocks
+                           if b.get("type") == "text")
+        return ""
+    except Exception:
+        return ""
+
+
 def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
     """
-    Generate PESTEL analysis specific to sector + geography.
-    Never caches fallback values — only caches real AI output.
-    Retries once if first attempt returns generic/empty output.
+    Generate PESTEL specific to sector + geography via Claude.
+    Uses proven flat-string prompt format.
+    Never caches failures.
     """
     cache_key = f"pestel_{sector}_{geography}_{business_model}"
     if cache_key in st.session_state:
         cached = st.session_state[cache_key]
-        # Only return cache if it contains real content (not generic fallback)
-        if cached.get("_is_fallback"):
-            del st.session_state[cache_key]
-        else:
+        if not cached.get("_is_fallback"):
             return cached
+        del st.session_state[cache_key]
+
+    REQUIRED = {"political","economic","social","technological","environmental","legal"}
 
     system = (
-        "You are a senior strategy analyst. Your task is to write a PESTEL analysis "
-        "that is SPECIFIC to the exact sector and geography provided. "
-        "Every sentence must reference the actual industry, country/region, "
-        "and relevant real-world dynamics — regulations, market trends, technology shifts. "
-        "Generic statements are NOT acceptable. "
-        "Respond with ONLY a JSON object. Start with { end with }. No other text."
+        "You are a strategy analyst. Respond ONLY with a flat JSON object "
+        "where each value is a plain string of 2-3 sentences. "
+        "No nested objects. No arrays. No markdown. No explanation."
     )
-
     prompt = (
-        f"Write a PESTEL analysis for this specific business:\n"
-        f"Sector: {sector}\n"
-        f"Geography: {geography}\n"
-        f"Business model: {business_model}\n\n"
-        f"Each factor must be 2-4 sentences, highly specific to {geography} and {sector}.\n"
-        f"Return JSON with keys: political, economic, social, technological, environmental, legal"
+        f"Write a PESTEL analysis for: Sector={sector}, Geography={geography}, "
+        f"Business model={business_model}.\n"
+        f"Be specific to {geography} and {sector} — name real regulations, market dynamics, "
+        f"named players, actual trends.\n"
+        f"Return this exact structure with string values only:\n"
+        + '{"political":"...","economic":"...","social":"...","technological":"...","environmental":"...","legal":"..."}'
     )
 
-    REQUIRED_KEYS = {"political", "economic", "social", "technological", "environmental", "legal"}
-    GENERIC_PHRASES = [
-        "political stability in target markets",
-        "sector growth aligned with regional gdp",
-        "shifting consumer preferences",
-        "rapid technological change creates",
-        "increasing regulatory pressure on environmental",
-        "data protection, intellectual property",
-    ]
+    result = _call_claude_only(system, prompt, max_tokens=800)
+    data   = _flatten_values(_extract_json(result))
 
-    def _is_generic(data: dict) -> bool:
-        """Return True if the response looks like the hardcoded fallback."""
-        if not data:
-            return True
-        for v in data.values():
-            for phrase in GENERIC_PHRASES:
-                if phrase.lower() in str(v).lower():
-                    return True
-        return False
+    if data and REQUIRED.issubset(data.keys()):
+        st.session_state[cache_key] = data
+        return data
 
-    # Try up to 2 times
-    data = {}
-    for attempt in range(2):
-        result = ai_call(system, prompt, max_tokens=700)
-        data   = _parse_ai_json(result)
-        if data and REQUIRED_KEYS.issubset(data.keys()) and not _is_generic(data):
-            st.session_state[cache_key] = data
-            return data
-
-    # If both attempts fail or return generic, show clear failure — do NOT show generic
-    if not data or not REQUIRED_KEYS.issubset(data.keys()):
-        failure = {k: f"Analysis unavailable for {sector} / {geography} — check API key." 
-                   for k in REQUIRED_KEYS}
-        failure["_is_fallback"] = True
-        return failure
-
-    # Has keys but might be generic — still cache and return (better than failure message)
-    st.session_state[cache_key] = data
-    return data
+    # Return honest failure — never cache it
+    return {k: f"Unable to generate analysis for {sector} / {geography}. "
+               f"Please retry — Claude API required."
+            for k in REQUIRED} | {"_is_fallback": True}
 
 
 def generate_porter(sector: str, business_model: str) -> dict:
     """
-    Generate Porter's Five Forces specific to sector and business model.
-    Never caches fallback. Uses same robust JSON parser as PESTEL.
+    Generate Porter's Five Forces specific to sector via Claude.
+    Uses proven flat-dict prompt format. Never caches failures.
     """
     cache_key = f"porter_{sector}_{business_model}"
     if cache_key in st.session_state:
         cached = st.session_state[cache_key]
-        if cached.get("_is_fallback"):
-            del st.session_state[cache_key]
-        else:
+        if not cached.get("_is_fallback"):
             return cached
+        del st.session_state[cache_key]
+
+    REQUIRED = {"rivalry","new_entrants","suppliers","buyers","substitutes"}
 
     system = (
-        "You are a senior strategy analyst. Write a Porter's Five Forces analysis "
-        "that is SPECIFIC to the exact sector and business model provided. "
-        "Each force must reference real competitive dynamics, named competitors, "
-        "or specific market conditions — not generic statements. "
-        "Respond with ONLY a JSON object. Start with { end with }. No other text."
+        "You are a strategy analyst. Respond ONLY with a flat JSON object. "
+        "No markdown. No explanation. No nested arrays."
     )
-
     prompt = (
-        f"Write Porter's Five Forces for this business:\n"
-        f"Sector: {sector}\n"
-        f"Business model: {business_model}\n\n"
-        f"Be specific — name actual competitors, real regulations, real dynamics.\n"
-        f"Return JSON with keys: rivalry, new_entrants, suppliers, buyers, substitutes\n"
-        f"Each value: {{\"level\": \"High/Medium/Low\", \"note\": \"2-3 specific sentences\"}}"
+        f"Write Porter's Five Forces for: Sector={sector}, Model={business_model}.\n"
+        f"Name real competitors, specific regulations, actual market dynamics.\n"
+        f"Return this exact structure:\n"
+        + '{"rivalry":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
+        + '"new_entrants":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
+        + '"suppliers":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
+        + '"buyers":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
+        + '"substitutes":{"level":"High/Medium/Low","note":"2-3 specific sentences"}}'
     )
 
-    REQUIRED_KEYS = {"rivalry", "new_entrants", "suppliers", "buyers", "substitutes"}
+    result = _call_claude_only(system, prompt, max_tokens=600)
+    data   = _extract_json(result)
 
-    data = {}
-    for attempt in range(2):
-        result = ai_call(system, prompt, max_tokens=500)
-        data   = _parse_ai_json(result)
-        if data and REQUIRED_KEYS.issubset(data.keys()):
+    # Validate structure — each value needs level + note
+    if data and REQUIRED.issubset(data.keys()):
+        valid = all(
+            isinstance(v, dict) and "level" in v and "note" in v
+            for k, v in data.items() if k in REQUIRED
+        )
+        if valid:
             st.session_state[cache_key] = data
             return data
 
-    if not data or not REQUIRED_KEYS.issubset(data.keys()):
-        failure = {k: {"level": "Medium",
-                       "note": f"Analysis unavailable for {sector} — check API key."}
-                   for k in REQUIRED_KEYS}
-        failure["_is_fallback"] = True
-        return failure
-
-    st.session_state[cache_key] = data
-    return data
+    return {k: {"level": "Medium",
+                "note": f"Unable to generate analysis for {sector}. Please retry."}
+            for k in REQUIRED} | {"_is_fallback": True}
 
 
 # ── User type options ─────────────────────────────────────────────────────────
