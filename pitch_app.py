@@ -249,9 +249,14 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
     Never caches failures.
     """
     cache_key = f"pestel_{sector}_{geography}_{business_model}"
+    # Only return cache if it has real content — never return failure messages
     if cache_key in st.session_state:
         cached = st.session_state[cache_key]
-        if not cached.get("_is_fallback"):
+        REQUIRED = {"political","economic","social","technological","environmental","legal"}
+        if REQUIRED.issubset(cached.keys()) and not any(
+            "Unable to generate" in str(v) or "Please retry" in str(v)
+            for v in cached.values()
+        ):
             return cached
         del st.session_state[cache_key]
 
@@ -292,7 +297,11 @@ def generate_porter(sector: str, business_model: str) -> dict:
     cache_key = f"porter_{sector}_{business_model}"
     if cache_key in st.session_state:
         cached = st.session_state[cache_key]
-        if not cached.get("_is_fallback"):
+        REQUIRED_P = {"rivalry","new_entrants","suppliers","buyers","substitutes"}
+        if REQUIRED_P.issubset(cached.keys()) and not any(
+            "Unable to generate" in str(v) or "Please retry" in str(v)
+            for v in cached.values()
+        ):
             return cached
         del st.session_state[cache_key]
 
@@ -542,10 +551,8 @@ if "valuation" in st.session_state:
                             f'<div class="risk">&#9651; {r}</div>',
                             unsafe_allow_html=True)
 
-    # ── Scorecard with confidence range ───────────────────────────────────────
-    sc     = result.scorecard_score
-    sc_lo  = max(0,   round(sc - 7))
-    sc_hi  = min(100, round(sc + 7))
+    # ── Scorecard ──────────────────────────────────────────────────────────────
+    sc = result.scorecard_score
     sc_color = score_color(sc)
     st.markdown(
         '<div style="background:#FFFFFF;border:1px solid #CDD2DB;border-radius:8px;'
@@ -553,26 +560,15 @@ if "valuation" in st.session_state:
         '<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;'
         f'text-transform:uppercase;color:{CLR};margin-bottom:8px;">'
         'Scorecard Rating (Bill Payne Method)</div>'
-        '<div style="display:flex;align-items:center;gap:20px;">'
-        '<div style="text-align:center;min-width:120px;">'
-        f'<div style="font-size:2.2rem;font-weight:800;color:{sc_color};line-height:1;">'
-        f'{sc_lo}&ndash;{sc_hi}</div>'
-        '<div style="font-size:0.65rem;color:#7A8499;margin-top:2px;">/ 100</div>'
-        '</div>'
-        '<div style="flex:1;">'
-        f'<div style="font-size:0.95rem;font-weight:600;color:#0D1117;margin-bottom:6px;">'
+        '<div style="display:flex;align-items:center;gap:16px;">'
+        f'<div style="font-size:2.4rem;font-weight:800;color:{sc_color};">{sc}/100</div>'
+        '<div>'
+        f'<div style="font-size:0.95rem;font-weight:600;color:#0D1117;">'
         f'{result.scorecard_label}</div>'
-        '<div style="position:relative;height:12px;background:#E5E7EB;border-radius:6px;margin-bottom:6px;">'
-        f'<div style="position:absolute;left:{sc_lo}%;width:{sc_hi - sc_lo}%;height:100%;'
-        f'background:{sc_color};opacity:0.35;border-radius:6px;"></div>'
-        f'<div style="position:absolute;left:{sc}%;transform:translateX(-50%);'
-        f'width:4px;height:100%;background:{sc_color};border-radius:2px;"></div>'
+        '<div style="background:#E5E7EB;border-radius:4px;height:8px;width:100%;margin:6px 0;">'
+        f'<div style="background:{sc_color};height:8px;border-radius:4px;width:{sc}%;"></div>'
         '</div>'
-        f'<div style="font-size:0.7rem;color:#7A8499;">'
-        f'Estimate: <strong style="color:{sc_color};">{sc}/100</strong>'
-        f'&nbsp;&nbsp;Range: {sc_lo}&ndash;{sc_hi}'
-        f'&nbsp;&nbsp;<em>Reflects AI assessment variance</em></div>'
-        f'<div style="font-size:0.68rem;color:#9CA3AF;margin-top:4px;">'
+        f'<div style="font-size:0.72rem;color:#7A8499;">'
         f'Team {params.team_score:.0f}/10 &nbsp;&middot;&nbsp;'
         f'Market {params.market_score:.0f}/10 &nbsp;&middot;&nbsp;'
         f'Product {params.product_score:.0f}/10 &nbsp;&middot;&nbsp;'
