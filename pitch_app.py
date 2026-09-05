@@ -409,9 +409,9 @@ if analyse_btn and pitch_text.strip():
         st.session_state["params"]       = params
         st.session_state["meta"]         = meta
         st.session_state["valuation"]    = pe.compute_valuation(params)
-        # Clear caches so they regenerate for new pitch
+        # Clear ALL analysis caches on every new pitch submission
         for k in list(st.session_state.keys()):
-            if k.startswith("pestel_") or k.startswith("porter_") or k.startswith("enrich_"):
+            if any(k.startswith(p) for p in ["pestel_","porter_","enrich_"]):
                 del st.session_state[k]
 
 if analyse_btn and pitch_text.strip():
@@ -715,9 +715,16 @@ if "valuation" in st.session_state:
             unsafe_allow_html=True)
 
     # ── PESTEL ─────────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="sec">PESTEL Analysis &mdash; AI-Generated, Live Context</div>',
-        unsafe_allow_html=True)
+    ph1, ph2 = st.columns([8,1])
+    with ph1:
+        st.markdown(
+            '<div class="sec">PESTEL Analysis &mdash; AI-Generated, Live Context</div>',
+            unsafe_allow_html=True)
+    with ph2:
+        if st.button("↻ Retry", key="pestel_retry"):
+            for k in list(st.session_state.keys()):
+                if k.startswith("pestel_"):
+                    del st.session_state[k]
 
     with st.spinner("Generating PESTEL..."):
         pestel = generate_pestel(params.sector, params.geography, params.business_model)
