@@ -21,7 +21,7 @@ from datetime import datetime
 EUROSTAT_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data"
 OECD_BASE     = "https://sdmx.oecd.org/public/rest/data/OECD.SDD.NAD,DSD_CLI@DF_CLI"
 
-# ── NACE mapping: sector → best available Eurostat SBS NACE group ─────────────
+# ── NACE mapping: business_model → Eurostat SBS NACE group ──────────────────
 SECTOR_TO_NACE = {
     "saas_b2b":         "J62",      # Computer programming, consultancy
     "saas_b2c":         "J62",
@@ -36,9 +36,71 @@ SECTOR_TO_NACE = {
     "sustainability":   "E",        # Water/waste/remediation
     "media_content":    "J59",      # Motion picture, music
     "professional_svcs":"M69",      # Legal and accounting
-    "marketplace":      "G47",
+    "marketplace":      "G47",      # Default marketplace → retail
     "general":          "G-N_S951_X_K",  # Broad services aggregate
 }
+
+# ── Keyword-based sector override ────────────────────────────────────────────
+# When the AI-extracted sector field contains these keywords, use the correct
+# industry NACE instead of the business_model default. This fixes cases like
+# SolShare (marketplace→G47/retail) when it should be D35 (energy supply).
+SECTOR_KEYWORD_NACE = [
+    # Energy & utilities
+    (["energy", "solar", "wind", "power", "electricity", "utility", "renewabl",
+      "grid", "kilowatt", "peer-to-peer energy", "p2p energy"],
+     "D35", "Electricity, gas, steam supply"),
+    # Health & medical
+    (["health", "medical", "clinic", "hospital", "pharma", "wellbeing",
+      "mental health", "wellness", "patient", "therapy", "care"],
+     "Q86", "Human health activities"),
+    # Education
+    (["education", "edtech", "learning", "school", "university", "training",
+      "tutoring", "e-learning", "course"],
+     "P85", "Education"),
+    # Real estate & property
+    (["real estate", "property", "housing", "rent", "mortgage", "proptech"],
+     "L68", "Real estate activities"),
+    # Food & hospitality
+    (["restaurant", "food", "hospitality", "hotel", "catering", "beverage"],
+     "I56", "Food and beverage service"),
+    # Transport & mobility
+    (["transport", "logistics", "freight", "fleet", "delivery", "mobility",
+      "ride", "taxi", "trucking"],
+     "H49", "Land transport"),
+    # Finance
+    (["fintech", "finance", "banking", "payment", "insurance", "lending",
+      "credit", "investment", "trading"],
+     "K64", "Financial service activities"),
+    # Construction & trades
+    (["construction", "renovation", "building", "trade", "plumbing",
+      "electrical", "contractor"],
+     "F43", "Specialised construction"),
+    # Circular economy & waste
+    (["circular", "recycl", "waste", "sustainability", "environment",
+      "green", "eco", "climate", "carbon"],
+     "E38", "Waste collection and treatment"),
+]
+
+
+def resolve_nace(business_model: str, sector: str, pitch_text: str = "") -> tuple:
+    """
+    Resolve the correct Eurostat NACE code using three layers:
+    1. Keyword match on sector field (AI-extracted sector label)
+    2. Keyword match on pitch text (catches cases where sector label is too generic)
+    3. Fall back to business_model → SECTOR_TO_NACE default
+
+    Returns (nace_code, description)
+    """
+    search_text = (sector + " " + pitch_text[:500]).lower()
+
+    for keywords, nace, description in SECTOR_KEYWORD_NACE:
+        for kw in keywords:
+            if kw in search_text:
+                return nace, description
+
+    # Fall back to business_model mapping
+    nace = SECTOR_TO_NACE.get(business_model, "G-N_S951_X_K")
+    return nace, business_model.replace("_", " ").title()
 
 # ── Country mapping: geography string → Eurostat alpha-2 ─────────────────────
 GEO_MAP = {
@@ -165,7 +227,7 @@ def compute_macro_adjustment(cli_value: float) -> float:
     return 0.90
 
 
-def enrich_with_live_data(sector: str, geography: str) -> dict:
+def enrich_with_live_data(sector: str, geography: str, pitch_text: str = "") -> dict:
     """
     Main enrichment function. Call this from pitch_app.py.
     Returns enrichment dict with:
@@ -175,7 +237,9 @@ def enrich_with_live_data(sector: str, geography: str) -> dict:
       - live_tam_eur: Eurostat-based TAM estimate (or None)
       - data_sources: list of what actually loaded live
     """
-    nace    = SECTOR_TO_NACE.get(sector, "G-N_S951_X_K")
+    nace, nace_desc = resolve_nace(business_model=sector,
+                                    sector=sector,
+                                    pitch_text=pitch_text)
     geo     = _resolve_geo(geography)
     sources = []
 
@@ -184,7 +248,7 @@ def enrich_with_live_data(sector: str, geography: str) -> dict:
     if ent_data:
         latest_year    = max(ent_data.keys())
         ent_count      = ent_data[latest_year]
-        sources.append(f"Eurostat SBS ({nace}/{geo}, {latest_year})")
+        sources.append(f"Eurostat SBS ({nace} {nace_desc}/{geo}, {latest_year})")
     else:
         ent_count = None
 
