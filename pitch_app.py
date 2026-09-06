@@ -311,9 +311,11 @@ def generate_porter(sector: str, business_model: str) -> dict:
         "You are a strategy analyst. Respond ONLY with a flat JSON object. "
         "No markdown. No explanation. No nested arrays."
     )
+    _company_ctx = f" Company: {company_description}." if company_description else ""
     prompt = (
-        f"Write Porter's Five Forces for: Sector={sector}, Model={business_model}.\n"
-        f"Name real competitors, specific regulations, actual market dynamics.\n"
+        f"Write Porter's Five Forces for: Sector={sector}, Model={business_model}.{_company_ctx}\n"
+        f"Name the ACTUAL direct competitors for THIS specific business (not generic sector giants).\n"
+        f"Name real companies, real regulations, real dynamics relevant to this exact market.\n"
         f"Return this exact structure:\n"
         + '{"rivalry":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
         + '"new_entrants":{"level":"High/Medium/Low","note":"2-3 specific sentences"},'
@@ -434,6 +436,8 @@ if analyse_btn and pitch_text.strip():
         for k in list(st.session_state.keys()):
             if any(k.startswith(p) for p in ["pestel_","porter_","enrich_","dcf_","mc_"]):
                 del st.session_state[k]
+        if "adj_geo" in st.session_state:
+            del st.session_state["adj_geo"]
 
 if analyse_btn and pitch_text.strip():
     with st.spinner("Pulling live market data (Eurostat + OECD)..."):
@@ -777,7 +781,8 @@ if "valuation" in st.session_state:
         unsafe_allow_html=True)
 
     with st.spinner("Generating Porter's Five Forces..."):
-        porter = generate_porter(params.sector, params.business_model)
+        _pitch_ctx = st.session_state.get('meta', {}).get('summary', '')
+        porter = generate_porter(params.sector, params.business_model, _pitch_ctx)
 
     PORTER_MAP = [
         ("Competitive Rivalry",     "rivalry"),
