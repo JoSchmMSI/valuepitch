@@ -289,7 +289,7 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
             for k in REQUIRED} | {"_is_fallback": True}
 
 
-def generate_porter(sector: str, business_model: str) -> dict:
+def generate_porter(sector: str, business_model: str, company_description: str = "") -> dict:
     """
     Generate Porter's Five Forces specific to sector via Claude.
     Uses proven flat-dict prompt format. Never caches failures.
