@@ -242,7 +242,7 @@ def _call_claude_only(system: str, prompt: str, max_tokens: int = 700) -> str:
         return ""
 
 
-def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
+def generate_pestel(sector: str, geography: str, business_model: str, company_description: str = "") -> dict:
     """
     Generate PESTEL specific to sector + geography via Claude.
     Uses proven flat-string prompt format.
@@ -267,11 +267,14 @@ def generate_pestel(sector: str, geography: str, business_model: str) -> dict:
         "where each value is a plain string of exactly 2 sentences maximum. "
         "Be concise. No nested objects. No arrays. No markdown. No explanation."
     )
+    _ctx = f" The company: {company_description}." if company_description else ""
     prompt = (
         f"Write a PESTEL analysis for: Sector={sector}, Geography={geography}, "
-        f"Business model={business_model}.\n"
-        f"Be specific to {geography} and {sector} — name real regulations, market dynamics, "
-        f"named players, actual trends.\n"
+        f"Business model={business_model}.{_ctx}\n"
+        f"Be specific to {geography} and {sector} — name real regulations, "
+        f"specific laws by name, real market players, actual industry trends.\n"
+        f"Do NOT use generic statements. Every sentence must reference the actual "
+        f"industry described above.\n"
         f"Return this exact structure with string values only:\n"
         + '{"political":"...","economic":"...","social":"...","technological":"...","environmental":"...","legal":"..."}'
     )
@@ -445,8 +448,9 @@ if analyse_btn and pitch_text.strip():
         if _params:
             _ekey = f"enrich_{_params.business_model}_{_params.geography}"
             if _ekey not in st.session_state:
+                _pitch_raw = st.session_state.get("meta", {}).get("summary", "")
                 _enr = pld.enrich_with_live_data(
-                    _params.business_model, _params.geography)
+                    _params.business_model, _params.geography, _pitch_raw)
                 st.session_state[_ekey] = _enr
                 if _enr.get("live_tam_eur"):
                     _params.tam_eur = _enr["live_tam_eur"]
@@ -755,7 +759,9 @@ if "valuation" in st.session_state:
                     del st.session_state[k]
 
     with st.spinner("Generating PESTEL..."):
-        pestel = generate_pestel(params.sector, params.geography, params.business_model)
+        _pestel_ctx = st.session_state.get("meta", {}).get("summary", "")
+        pestel = generate_pestel(params.sector, params.geography,
+                                 params.business_model, _pestel_ctx)
 
     PESTEL_MAP = [
         ("P", "Political",     "political"),
