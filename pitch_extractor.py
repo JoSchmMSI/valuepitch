@@ -55,7 +55,12 @@ Extract the following fields. If a value is not mentioned, use the defaults prov
 
 Rules:
 - Extract numbers from text (e.g. '€500K' → 500000, '2M users' → use to estimate revenue)
-- If stage is unclear but revenue exists, use 'seed' or 'series_a'
+- Stage detection rules (apply in order):
+  1. If current revenue = 0 OR pitch mentions "free pilots", "no revenue", "pre-revenue", "zero revenue", "pilot customers" with no payment → use pre_revenue
+  2. If revenue exists but < EUR 500K ARR and raising first round → use seed
+  3. If revenue EUR 500K–3M ARR → use series_a
+  4. If revenue > EUR 3M ARR → use series_b_plus
+  5. If truly unclear → use seed
 - Scores should be based on what is actually described — do NOT inflate
 - business_model must exactly match one of the enum values listed
 - stage must exactly match one of the enum values listed
